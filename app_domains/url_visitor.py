@@ -721,8 +721,12 @@ def request_full_file_target_links(target_links_to_visit):
     print("-------visits of target links")
     remove_url_saved(RUN_CONFIG["PATH_URL_REVISIT_SAVE"])
 
-    # todo: add NON-PARALLEL option
-    Parallel(n_jobs=RUN_CONFIG["MAX_PROCESSES"])(delayed(async_url_batch_visit)(batch) for batch in url_batches)
+    if RUN_CONFIG["MULTI_PROCESSING"]:
+        Parallel(n_jobs=RUN_CONFIG["MAX_PROCESSES"])(delayed(async_url_batch_visit)(batch) for batch in url_batches)
+    else:
+        async_url_batch_visit(target_links_to_visit)
+
+
     list_target_websites = [dico_to_website(d) for d in gather_url_saved(RUN_CONFIG["PATH_URL_REVISIT_SAVE"])]
 
     remove_url_saved(RUN_CONFIG["PATH_URL_REVISIT_SAVE"])
@@ -751,8 +755,14 @@ def single_url_browser_visit(link, webdriver):
     # visit url
     webdriver.get(full_url)
 
-    # loading timeout
-    webdriver.implicitly_wait(0)
+    # wait until page loaded
+    for i in range(LOADING_TIME):
+        page_state = webdriver.execute_script('return document.readyState;')
+        if page_state == 'complete':
+            print(f".... (visit) document ready {full_url}")
+            break
+        print(f".... (visit) document not yet ready loaded {full_url} ({LOADING_TIME-i}s left. State: {page_state})")
+        time.sleep(1)
 
     try:
         html = webdriver.execute_script("return document.documentElement.innerHTML")
@@ -779,8 +789,12 @@ def request_full_file_with_browser(links):
     """Visit a list of URLs with Chrome webdriver"""
     # visiting links
     all_resu = []
-    all_resu = Parallel(n_jobs=RUN_CONFIG["WORKERS_POST_PROCESSING"])(
-        delayed(single_url_browser_load_visit)(link) for link in tqdm(links))
+    if RUN_CONFIG["MULTI_PROCESSING"]:
+        all_resu = Parallel(n_jobs=RUN_CONFIG["WORKERS_POST_PROCESSING"])(
+            delayed(single_url_browser_load_visit)(link) for link in tqdm(links))
+    else:
+        print(f"-------- Running single_url_browser_load_visit in no multi mode for {len(tqdm(links))} links.")
+        all_resu = [single_url_browser_load_visit(link) for link in tqdm(links)]
 
     all_resu = [e for e in all_resu if (e is not None)]
 
@@ -866,59 +880,82 @@ def single_url_browser_load_visit(link):
         if RUN_CONFIG["DEBUG_PRINT"]:
             print(f"----> START single_url_browser_load_visit {link['url']} <-------")
         webdriver = initiate_browser_driver()
-        resu = single_url_browser_visit(link, webdriver)
-
-        # screenshot save
-        if RUN_CONFIG["DO_SAMPLING"] and link['to_sample']:
-            sam_plog.it(f"({link['url']}) | PREPARING FOR SCREENSHOT : {link['ss_filename']}")
-            '''
-            # use a scrolling trick to make sure page has fully loaded before taking the screenshot (so we don't get an empty page)
-            driver.execute_script("""
-                (function () {
-                    var y = 0;
-                    var step = 100;
-                    window.scroll(0, 0);
-
-                    function f() {
-                        if (y < document.body.scrollHeight) {
-                            y += step;
-                            window.scroll(0, y);
-                            setTimeout(f, 100);
-                        } else {
-                            window.scroll(0, 0);
-                            document.title += "scroll-done";
-                        }
-                    }
-
-                    setTimeout(f, 1000);
-                })();
-            """)
-
-            for i in range(30):
-                if "scroll-done" in driver.title:
-                    break
-                time.sleep(1)
-            '''
-            for i in range(30):
-                if webdriver.execute_script("""document.onreadystatechange = function () {
-                                               if (document.readyState == "complete") {
-                                                    return "complete";
-                                                }
-                                            }""") == 'complete':
-                    break
-                time.sleep(1)
-            total_height = webdriver.execute_script("""
-                if (document.scrollingElement){
-                    return document.scrollingElement.scrollHeight;
-                } 
-                return document.body.offsetHeight;
-            """)
+        try:
             max_height = RUN_CONFIG["SAMPLING_MAX_SCREENSHOT_HEIGHT_PX"]
-            webdriver.set_window_size(1200, total_height if total_height <= max_height else max_height)
-            webdriver.save_screenshot(link['ss_filename'])
-            sam_plog.it(f"({link['url']}) | SCREENSHOT SAVED")
+            resu = single_url_browser_visit(link, webdriver)
 
-        webdriver.quit()
+            # screenshot save
+            if RUN_CONFIG["DO_SAMPLING"] and link['to_sample']:
+                sam_plog.it(f"({link['url']}) | PREPARING FOR SCREENSHOT : {link['ss_filename']}")
+                '''
+                # use a scrolling trick to make sure page has fully loaded before taking the screenshot (so we don't get an empty page)
+                driver.execute_script("""
+                    (function () {
+                        var y = 0;
+                        var step = 100;
+                        window.scroll(0, 0);
+
+                        function f() {
+                            if (y < document.body.scrollHeight) {
+                                y += step;
+                                window.scroll(0, y);
+                                setTimeout(f, 100);
+                            } else {
+                                window.scroll(0, 0);
+                                document.title += "scroll-done";
+                            }
+                        }
+
+                        setTimeout(f, 1000);
+                    })();
+                """)
+
+                for i in range(30):
+                    if "scroll-done" in driver.title:
+                        break
+                    time.sleep(1)
+                '''
+                for i in range(30):
+                    # if webdriver.execute_script("""document.onreadystatechange = function () {
+                    #                                if (document.readyState == "complete") {
+                    #                                     return "complete";
+                    #                                 }
+                    #                             }""") == 'complete':
+                    #     break
+                    page_state = webdriver.execute_script('return document.readyState;')
+                    if page_state == 'complete':
+                        break
+                    print(f".... document not yet ready loaded ({30-i}s left. State: {page_state})")
+                    time.sleep(1)
+                total_height = webdriver.execute_script("""
+                    if (document.scrollingElement){
+                        return document.scrollingElement.scrollHeight;
+                    } 
+                    return document.body.offsetHeight;
+                """)
+                print(f"Total height: {total_height}")
+                screenshot_height = total_height if total_height <= max_height else max_height
+                print(f"Screenshot height: {screenshot_height}")
+                webdriver.set_window_size(RUN_CONFIG["SAMPLING_SCREENSHOT_WIDTH_PX"], screenshot_height)
+                for i in range(30):
+                    page_state = webdriver.execute_script('return document.readyState;')
+                    if page_state == 'complete':
+                        break
+                    print(f".... (after resize) document not yet ready loaded ({30-i}s left. State: {page_state})")
+                    time.sleep(1)
+                webdriver.save_screenshot(link['ss_filename'])
+                if RUN_CONFIG["DEBUG_PRINT"]:
+                    print(f"({link['url']}) | SCREENSHOT SAVED")
+                sam_plog.it(f"({link['url']}) | SCREENSHOT SAVED")
+        finally:
+            try:
+                webdriver.close()
+            except:
+                print("INFO: failed to close driver")
+            try:
+                webdriver.quit()
+            except:
+                print("INFO: failed to quit driver")
 
     except Exception as e:
         print("JS error with {} of type: {} : {} --> js interpretation removed".format(link["url"], type(e), str(e)))
@@ -935,14 +972,19 @@ def initiate_browser_driver():
     options = webdriver.ChromeOptions()
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('headless')
-    options.add_argument("disable-extensions")
-    options.add_argument('silent')
-    options.add_argument('window-size=1200x600')
-    options.add_argument(f'user-agent={USER_AGENT}')
+    options.add_argument('--headless')
+    options.add_argument("--disable-extensions")
+    options.add_argument('--silent')
+    options.add_argument(f'--user-agent={USER_AGENT}')
+    options.page_load_strategy = 'eager'
+    options.accept_insecure_certs = True
+    options.timeouts = { 'pageLoad': LOADING_TIME, 'script': LOADING_TIME}
     # options.add_argument("--incognito")
     # launch Chrome
     driver = webdriver.Chrome(chrome_options=options)
+    driver.set_window_size(RUN_CONFIG["SAMPLING_SCREENSHOT_WIDTH_PX"], RUN_CONFIG["SAMPLING_SCREENSHOT_HEIGHT_PX"])
     # loading timeout
     driver.implicitly_wait(LOADING_TIME)  # wait for full loading
+    driver.set_page_load_timeout(LOADING_TIME)
+    driver.set_script_timeout(LOADING_TIME)
     return driver
