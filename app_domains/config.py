@@ -43,6 +43,7 @@ RUN_CONFIG = {
     # "DO_JS_INTERPRETATION": False,
     "DO_CONCAT_FORMAT": True,
     "DO_SAMPLING": False,
+    "DO_SAMPLING_UPLOAD": False,
 
     # REQUESTS ENGINE
     # "USE_UVLOOP": True,

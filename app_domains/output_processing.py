@@ -245,7 +245,7 @@ def ProcessFile(file):
 			plog.it(str(error1.msg), is_error=True)
 			plog.it("Critical failure...I'm giving up", is_error=True)
 	# process samples
-	if len(samples) > 0:
+	if len(samples) > 0 and RUN_CONFIG['DO_SAMPLING_UPLOAD']:
 		ProcessSamples(samples)
 
 def get_base64_encoded_image(image_path):
